@@ -1,0 +1,10 @@
+interface:
+  display_name: "Docker 容器与空间只读巡检"
+  short_description: "结构化查询 Docker 容器状态、实时性能统计与磁盘占用"
+  default_prompt: "使用 $ssh-mcp-docker 检查目标服务器的 Docker 容器状态与磁盘占用。"
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "ssh-mcp"
+      description: "本机服务器控制台 (ssh-mcp) 服务"

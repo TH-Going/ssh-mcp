@@ -1,0 +1,7 @@
+/target
+/node_modules
+/dist
+*.pdb
+*.log
+.DS_Store
+Thumbs.db

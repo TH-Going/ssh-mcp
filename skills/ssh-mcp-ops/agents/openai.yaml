@@ -1,0 +1,13 @@
+interface:
+  display_name: "ssh-mcp 服务器安全运维"
+  short_description: "通过本机 Windows 服务器控制台 MCP 安全巡检和运维 Linux 服务器"
+  default_prompt: "使用 $ssh-mcp-ops 检查目标服务器状态，并完整跟踪持久任务结果。"
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "ssh-mcp"
+      description: "本机服务器控制台 (ssh-mcp) 服务"
+
+policy:
+  allow_implicit_invocation: true

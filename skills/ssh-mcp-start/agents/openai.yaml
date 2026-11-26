@@ -1,0 +1,10 @@
+interface:
+  display_name: "绑定服务器会话上下文"
+  short_description: "通过 ssh-mcp 选择单台服务器设为当前对话默认运维目标"
+  default_prompt: "使用 $ssh-mcp-start 选择一台服务器，设为当前对话后续操作的默认目标。"
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "ssh-mcp"
+      description: "本机服务器控制台 (ssh-mcp) 服务"

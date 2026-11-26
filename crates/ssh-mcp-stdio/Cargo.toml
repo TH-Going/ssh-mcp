@@ -1,0 +1,15 @@
+[package]
+name = "ssh-mcp-stdio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ssh-mcp-stdio"
+path = "src/main.rs"
+
+[dependencies]
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "time"] }

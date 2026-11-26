@@ -1,0 +1,10 @@
+interface:
+  display_name: "Docker 两阶段安全清理"
+  short_description: "先生成只读清理预览计划，经确认后逐项安全校验删除并自动复查健康度"
+  default_prompt: "使用 $ssh-mcp-docker-cleanup 为目标服务器生成 Docker 清理预览，待我确认后再执行。"
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "ssh-mcp"
+      description: "本机服务器控制台 (ssh-mcp) 服务"

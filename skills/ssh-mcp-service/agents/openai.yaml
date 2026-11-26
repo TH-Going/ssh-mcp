@@ -1,0 +1,10 @@
+interface:
+  display_name: "systemd 服务排障与控制"
+  short_description: "查询 systemd 服务状态与 journald 日志，并受控执行启停或重启"
+  default_prompt: "使用 $ssh-mcp-service 排查目标服务器上的指定 systemd 服务状态与日志。"
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "ssh-mcp"
+      description: "本机服务器控制台 (ssh-mcp) 服务"
