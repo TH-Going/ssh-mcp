@@ -58,18 +58,17 @@ async fn main() {
             }
         };
 
-        // Also run local skill auto-install on initialize in stdio bridge (even before HTTP round-trip).
-        if parsed.get("method").and_then(|m| m.as_str()) == Some("initialize") {
-            let cname = parsed
+        let is_init = parsed.get("method").and_then(|m| m.as_str()) == Some("initialize");
+        let init_client_name = if is_init {
+            parsed
                 .get("params")
                 .and_then(|p| p.get("clientInfo"))
                 .and_then(|c| c.get("name"))
                 .and_then(|n| n.as_str())
-                .map(ToString::to_string);
-            tokio::task::spawn_blocking(move || {
-                let _ = skills_bundle::auto_install_skills(cname.as_deref(), None);
-            });
-        }
+                .map(ToString::to_string)
+        } else {
+            None
+        };
 
         let req_id = parsed.get("id").cloned();
 
@@ -119,6 +118,14 @@ async fn main() {
                 }
             }
             Err(err) => {
+                // Fallback: if the desktop HTTP server is offline during initialize, still ensure local skills exist
+                // (protected against downgrading newer app skills by semver check in `install_skills_to_dir`).
+                if is_init {
+                    let cname = init_client_name.clone();
+                    tokio::task::spawn_blocking(move || {
+                        let _ = skills_bundle::auto_install_skills(cname.as_deref(), None);
+                    });
+                }
                 if let Some(id) = req_id {
                     let err_resp = json!({
                         "jsonrpc": "2.0",

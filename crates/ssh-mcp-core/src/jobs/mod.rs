@@ -186,7 +186,6 @@ impl JobService {
             snapshot_path = Some(snap);
         }
 
-        let settings = self.db.get_raw_settings()?;
         let requester = input
             .requester
             .as_deref()
@@ -206,8 +205,6 @@ impl JobService {
                     server,
                     op,
                     &ApprovalPolicyContext {
-                        allow_read_only_shell_without_approval: settings
-                            .allow_read_only_shell_without_approval,
                         cleanup_includes_volumes: cleanup_plan
                             .as_ref()
                             .is_some_and(|p| p.policy.resource_types.contains(&DockerResourceType::Volumes)),

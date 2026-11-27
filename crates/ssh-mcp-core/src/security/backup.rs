@@ -60,13 +60,17 @@ struct PortableServerEntry {
     trusted_fingerprint: Option<String>,
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PortableSettings {
     default_concurrency: usize,
     default_timeout_seconds: u32,
-    #[serde(default)]
-    allow_read_only_shell_without_approval: bool,
+    #[serde(default = "default_true")]
+    auto_update_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -155,8 +159,7 @@ impl BackupService {
             settings: PortableSettings {
                 default_concurrency: settings_row.default_concurrency,
                 default_timeout_seconds: settings_row.default_timeout_seconds,
-                allow_read_only_shell_without_approval: settings_row
-                    .allow_read_only_shell_without_approval,
+                auto_update_enabled: settings_row.auto_update_enabled,
             },
         };
 
@@ -369,12 +372,7 @@ impl BackupService {
         self.db.update_raw_settings(&SettingsUpdateRequest {
             default_concurrency: Some(pending.payload.settings.default_concurrency),
             default_timeout_seconds: Some(pending.payload.settings.default_timeout_seconds),
-            allow_read_only_shell_without_approval: Some(
-                pending
-                    .payload
-                    .settings
-                    .allow_read_only_shell_without_approval,
-            ),
+            auto_update_enabled: Some(pending.payload.settings.auto_update_enabled),
             ..Default::default()
         })?;
 

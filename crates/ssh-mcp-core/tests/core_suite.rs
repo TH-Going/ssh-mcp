@@ -111,7 +111,6 @@ fn risk_policy_enforces_volume_delete_even_in_direct_mode() {
         &direct_srv,
         &cleanup_op,
         &ApprovalPolicyContext {
-            allow_read_only_shell_without_approval: false,
             cleanup_includes_volumes: true,
             policy_summary: Some("含卷删除".to_string()),
         },
@@ -119,12 +118,91 @@ fn risk_policy_enforces_volume_delete_even_in_direct_mode() {
     assert!(d2.requires_approval);
     assert_eq!(d2.matched_policy, "docker.cleanup.volume_delete");
 
-    // Read-only shell allowlist strictly rejects shell metacharacters
+    // In Approval mode, dedicated read-only tools (even with sudo: true) and read-only shell commands
+    // (including pipelines, &&, single-quoted awk $1, and sudo) do NOT require approval!
+    let approval_srv = db
+        .create_server(ServerCreateRequest {
+            name: "prod-approval".to_string(),
+            host: "10.0.1.11".to_string(),
+            port: 22,
+            username: "deploy".to_string(),
+            environment: "生产".to_string(),
+            control_mode: ControlMode::Approval,
+            authentication: SshAuthentication::Password {
+                password: "secretpassword".to_string(),
+            },
+            sudo_password: None,
+        })
+        .unwrap();
+
+    let sudo_ro_tool = ToolOperation::DockerContainersList {
+        state: ssh_mcp_core::models::DockerContainerStateFilter::Running,
+        limit: 50,
+        sudo: true,
+        timeout_seconds: None,
+    };
+    let ro_tool_dec = evaluate_approval_policy(
+        &approval_srv,
+        &sudo_ro_tool,
+        &ApprovalPolicyContext::default(),
+    );
+    assert!(!ro_tool_dec.requires_approval);
+    assert_eq!(ro_tool_dec.matched_policy, "tool.read_only");
+
+    let sudo_ro_shell = ToolOperation::ShellExecute {
+        command: "ls -la /var/log | head -n 10 && sudo -n docker ps --format '{{.Names}}' && awk '{print $1}' /etc/hosts".to_string(),
+        sudo: true,
+        timeout_seconds: None,
+        reason: None,
+    };
+    let ro_shell_dec = evaluate_approval_policy(
+        &approval_srv,
+        &sudo_ro_shell,
+        &ApprovalPolicyContext::default(),
+    );
+    assert!(!ro_shell_dec.requires_approval);
+    assert_eq!(ro_shell_dec.matched_policy, "shell.read_only.exempt");
+
+    // FileDownload MUST still require approval in Approval mode
+    let download_op = ToolOperation::FileDownload {
+        remote_path: "/etc/nginx/nginx.conf".to_string(),
+        local_path: "C:\\temp\\nginx.conf".to_string(),
+        overwrite: false,
+        timeout_seconds: None,
+        reason: None,
+    };
+    let dl_dec = evaluate_approval_policy(
+        &approval_srv,
+        &download_op,
+        &ApprovalPolicyContext::default(),
+    );
+    assert!(dl_dec.requires_approval);
+    assert_eq!(dl_dec.matched_policy, "tool.file_write");
+
+    // Read-only shell allowlist accepts common inspection commands & rejects injections/mutations
     assert!(is_recognized_read_only_shell("/usr/bin/uptime"));
-    assert!(is_recognized_read_only_shell("/bin/df -h"));
+    assert!(is_recognized_read_only_shell("df -h"));
+    assert!(is_recognized_read_only_shell("ps aux | grep nginx | head -n 5"));
+    assert!(is_recognized_read_only_shell("sudo systemctl status nginx && journalctl -u nginx -n 50 --no-pager"));
+    assert!(is_recognized_read_only_shell("ip -br addr && ss -tulpn"));
+    assert!(is_recognized_read_only_shell("find /var/log -name \"*.log\" -mtime +7"));
+    assert!(is_recognized_read_only_shell("git -C /srv/app status && git -C /srv/app branch -a"));
+
+    // Must reject metacharacter injection, command substitution, redirection, and mutating flags
     assert!(!is_recognized_read_only_shell("/bin/df -h; rm -rf /"));
     assert!(!is_recognized_read_only_shell("/bin/df $(whoami)"));
-    assert!(!is_recognized_read_only_shell("df -h"));
+    assert!(!is_recognized_read_only_shell("echo \"$HOME\""));
+    assert!(!is_recognized_read_only_shell("ls `id`"));
+    assert!(!is_recognized_read_only_shell("echo hello > /tmp/out"));
+    assert!(!is_recognized_read_only_shell("find /tmp -name '*.log' -delete"));
+    assert!(!is_recognized_read_only_shell("find /tmp -exec sh -c 'id' \\;"));
+    assert!(!is_recognized_read_only_shell("sed -i 's/foo/bar/g' /etc/hosts"));
+    assert!(!is_recognized_read_only_shell("awk '{system(\"id\")}' /etc/hosts"));
+    assert!(!is_recognized_read_only_shell("sudo -u root sh -c 'ls'"));
+    assert!(!is_recognized_read_only_shell("sudo systemctl restart nginx"));
+    assert!(!is_recognized_read_only_shell("docker rm my-container"));
+    assert!(!is_recognized_read_only_shell("git branch -D feature"));
+    assert!(!is_recognized_read_only_shell("journalctl --vacuum-time=2d"));
 }
 
 #[test]
@@ -485,8 +563,28 @@ fn embedded_skills_bundle_installs_all_seven_skills_idempotently() {
         .join("ssh-mcp-ops/references/workflows.md")
         .exists());
     assert!(temp.path().join("ssh-mcp-docker-cleanup/SKILL.md").exists());
+    assert!(temp.path().join(".ssh-mcp-skills-manifest.json").exists());
 
     // Second run should detect identical contents and write 0 files.
     let written2 = install_skills_to_dir(temp.path()).expect("second install");
     assert_eq!(written2, 0);
+
+    // If a skill file on disk is outdated/modified, re-running automatically overwrites it!
+    std::fs::write(temp.path().join("ssh-mcp-ops/SKILL.md"), "outdated skill").unwrap();
+    let written3 = install_skills_to_dir(temp.path()).expect("auto update outdated skill");
+    assert_eq!(written3, 1);
+
+    // Anti-downgrade check: if manifest claims a higher future version (e.g. 99.0.0), an older binary must NOT overwrite it.
+    std::fs::write(
+        temp.path().join(".ssh-mcp-skills-manifest.json"),
+        r#"{"appVersion":"99.0.0","bundleHash":"future","managedFiles":[]}"#,
+    )
+    .unwrap();
+    std::fs::write(temp.path().join("ssh-mcp-ops/SKILL.md"), "future v99 skill").unwrap();
+    let written4 = install_skills_to_dir(temp.path()).expect("skip downgrade");
+    assert_eq!(written4, 0);
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("ssh-mcp-ops/SKILL.md")).unwrap(),
+        "future v99 skill"
+    );
 }

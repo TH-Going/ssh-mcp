@@ -19,7 +19,7 @@
 | 结构化分析 Docker 磁盘空间 | `docker_disk_usage` | 返回镜像、容器、数据卷与构建缓存的总量及可回收空间 |
 | 预览 Docker 安全清理计划 | `docker_cleanup_preview` | 只读；单次绑定 1 台 `serverId`，返回 15 分钟有效的 `cleanupPlanId` |
 | 执行 Docker 清理计划 | `docker_cleanup_execute` | 仅接收 `cleanupPlanId` 与 `reason`；删除前二次校验对象摘要 |
-| 执行专用工具无法覆盖的命令 | `shell_execute` | 写操作；传入忠实于用户意图的 `command`、`sudo` 与 `reason` |
+| 执行专用工具无法覆盖的命令 | `shell_execute` | 需审批模式下纯只读查询（含安全管道与 `sudo`）免审批；变更命令须传入忠实于用户意图的 `command`、`sudo` 与 `reason` |
 | 本机文件原子上传至远端 | `file_upload` | 写操作；创建任务时锁定本机快照哈希，传入 `reason` |
 | 远端文件原子下载至本机 | `file_download` | 写操作；默认 `overwrite: false`，传入 `reason` |
 | 查看最近持久任务 | `jobs_list` | 用于找回既有任务 |

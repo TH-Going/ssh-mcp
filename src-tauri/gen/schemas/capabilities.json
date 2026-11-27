@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"Default desktop capabilities for Server Safe Console","local":true,"windows":["main"],"permissions":["core:default","dialog:default","notification:default"]}}
+{"default":{"identifier":"default","description":"Default desktop capabilities for Server Safe Console","local":true,"windows":["main"],"permissions":["core:default","dialog:default","notification:default","updater:default"]}}

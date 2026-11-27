@@ -28,9 +28,9 @@ pub struct RawSettingsRow {
     pub mcp_port: u16,
     pub refresh_interval_seconds: u32,
     pub failure_alerts_enabled: bool,
+    pub auto_update_enabled: bool,
     pub default_concurrency: usize,
     pub default_timeout_seconds: u32,
-    pub allow_read_only_shell_without_approval: bool,
 }
 
 #[derive(Debug)]
@@ -142,7 +142,7 @@ impl AppDatabase {
         let conn = self.conn.lock();
         conn.query_row(
             "SELECT mcp_enabled, mcp_port, refresh_interval_seconds, failure_alerts_enabled,
-                    default_concurrency, default_timeout_seconds, allow_read_only_shell_without_approval
+                    auto_update_enabled, default_concurrency, default_timeout_seconds
              FROM settings WHERE id = 1",
             [],
             |r| {
@@ -151,9 +151,9 @@ impl AppDatabase {
                     mcp_port: r.get::<_, u16>(1)?,
                     refresh_interval_seconds: r.get::<_, u32>(2)?,
                     failure_alerts_enabled: r.get::<_, i64>(3)? != 0,
-                    default_concurrency: r.get::<_, usize>(4)?,
-                    default_timeout_seconds: r.get::<_, u32>(5)?,
-                    allow_read_only_shell_without_approval: r.get::<_, i64>(6)? != 0,
+                    auto_update_enabled: r.get::<_, i64>(4)? != 0,
+                    default_concurrency: r.get::<_, usize>(5)?,
+                    default_timeout_seconds: r.get::<_, u32>(6)?,
                 })
             },
         )
@@ -171,9 +171,9 @@ impl AppDatabase {
             refresh_interval_seconds: raw.refresh_interval_seconds,
             failure_alerts_enabled: raw.failure_alerts_enabled,
             autostart_enabled: is_autostart_enabled(),
+            auto_update_enabled: raw.auto_update_enabled,
             default_concurrency: raw.default_concurrency,
             default_timeout_seconds: raw.default_timeout_seconds,
-            allow_read_only_shell_without_approval: raw.allow_read_only_shell_without_approval,
             approval_ttl_seconds: 900,
             output_retention_hours: 24,
             audit_retention_days: 90,
@@ -196,6 +196,9 @@ impl AppDatabase {
         if let Some(v) = req.failure_alerts_enabled {
             current.failure_alerts_enabled = v;
         }
+        if let Some(v) = req.auto_update_enabled {
+            current.auto_update_enabled = v;
+        }
         if let Some(v) = req.default_concurrency {
             if !(1..=10).contains(&v) {
                 return Err(CoreError::InvalidInput("默认并发数必须在 1..10 之间".to_string()));
@@ -210,9 +213,6 @@ impl AppDatabase {
             }
             current.default_timeout_seconds = v;
         }
-        if let Some(v) = req.allow_read_only_shell_without_approval {
-            current.allow_read_only_shell_without_approval = v;
-        }
 
         let now = Utc::now().to_rfc3339();
         let conn = self.conn.lock();
@@ -221,18 +221,18 @@ impl AppDatabase {
                 mcp_enabled = ?1,
                 refresh_interval_seconds = ?2,
                 failure_alerts_enabled = ?3,
-                default_concurrency = ?4,
-                default_timeout_seconds = ?5,
-                allow_read_only_shell_without_approval = ?6,
+                auto_update_enabled = ?4,
+                default_concurrency = ?5,
+                default_timeout_seconds = ?6,
                 updated_at = ?7
              WHERE id = 1",
             params![
                 current.mcp_enabled as i64,
                 current.refresh_interval_seconds,
                 current.failure_alerts_enabled as i64,
+                current.auto_update_enabled as i64,
                 current.default_concurrency as i64,
                 current.default_timeout_seconds,
-                current.allow_read_only_shell_without_approval as i64,
                 now
             ],
         )?;

@@ -1,11 +1,15 @@
 {
   "name": "ssh-mcp",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "prepare:sidecar": "node scripts/prepare-sidecar.mjs",
+    "build:all": "pnpm prepare:sidecar && pnpm build",
+    "tauri": "tauri",
+    "build:installer": "node scripts/build-installer.mjs",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview"
   },
@@ -21,6 +25,7 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.2.0",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",

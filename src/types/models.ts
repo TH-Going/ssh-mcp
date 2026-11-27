@@ -178,9 +178,9 @@ export interface AppSettings {
   refreshIntervalSeconds: number;
   failureAlertsEnabled: boolean;
   autostartEnabled: boolean;
+  autoUpdateEnabled: boolean;
   defaultConcurrency: number;
   defaultTimeoutSeconds: number;
-  allowReadOnlyShellWithoutApproval: boolean;
   approvalTtlSeconds: number;
   outputRetentionHours: number;
   auditRetentionDays: number;
@@ -191,9 +191,9 @@ export interface SettingsUpdateRequest {
   refreshIntervalSeconds?: number;
   failureAlertsEnabled?: boolean;
   autostartEnabled?: boolean;
+  autoUpdateEnabled?: boolean;
   defaultConcurrency?: number;
   defaultTimeoutSeconds?: number;
-  allowReadOnlyShellWithoutApproval?: boolean;
 }
 
 export interface BackupPreflightItem {
@@ -242,4 +242,29 @@ export interface SkillsSyncReport {
   skillCount: number;
   syncedTargets: string[];
   filesWritten: number;
+  appVersion: string;
+  bundleHash: string;
+  updated: boolean;
+}
+
+export type UpdatePhase =
+  | "idle"
+  | "checking"
+  | "up_to_date"
+  | "available"
+  | "downloading"
+  | "ready"
+  | "installing"
+  | "error";
+
+export interface UpdateStatusSnapshot {
+  phase: UpdatePhase;
+  currentVersion: string;
+  latestVersion: string | null;
+  releaseNotes: string | null;
+  publishedAt: string | null;
+  downloadedBytes: number;
+  totalBytes: number | null;
+  error: string | null;
+  lastCheckedAt: string | null;
 }

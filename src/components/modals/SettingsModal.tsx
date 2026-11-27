@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Button,
   Input,
@@ -9,12 +9,14 @@ import {
   message,
 } from "antd";
 import {
+  CloudSyncOutlined,
   CopyOutlined,
   DownloadOutlined,
   RightOutlined,
   SyncOutlined,
   UploadOutlined,
 } from "@ant-design/icons";
+import { listen } from "@tauri-apps/api/event";
 import {
   open as openFileDialog,
   save as saveFileDialog,
@@ -25,8 +27,9 @@ import type {
   BackupImportAction,
   BackupPreflight,
   SettingsUpdateRequest,
+  UpdateStatusSnapshot,
 } from "../../types/models";
-import { api } from "../../api/client";
+import { api, formatBytes, formatRelativeTime } from "../../api/client";
 
 interface Props {
   open: boolean;
@@ -47,6 +50,10 @@ export const SettingsModal: React.FC<Props> = ({
 }) => {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [syncingSkills, setSyncingSkills] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatusSnapshot | null>(
+    null,
+  );
+  const [installingUpdate, setInstallingUpdate] = useState(false);
 
   // Export backup dialog state
   const [exportOpen, setExportOpen] = useState(false);
@@ -61,6 +68,28 @@ export const SettingsModal: React.FC<Props> = ({
   const [decisions, setDecisions] = useState<Record<string, BackupImportAction>>({});
   const [importing, setImporting] = useState(false);
 
+  useEffect(() => {
+    if (!open) return;
+    void api
+      .updaterGetStatus()
+      .then(setUpdateStatus)
+      .catch(() => {});
+  }, [open]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    void listen<UpdateStatusSnapshot>("console:updater-changed", (event) => {
+      if (event.payload) {
+        setUpdateStatus(event.payload);
+      }
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
   const copyLine = async (val: string, label: string) => {
     await navigator.clipboard.writeText(val);
     message.success(`${label}已复制`);
@@ -73,7 +102,7 @@ export const SettingsModal: React.FC<Props> = ({
       `请帮我接入本机服务器控制台 MCP 服务（名称设为 ssh-mcp）并自动安装配套 Skills：`,
       `1. 执行命令自动安装配套的 7 个受控运维 Skills：`,
       `   "${stdioExe}" --install-skills`,
-      `2. 配置 MCP 服务 ssh-mcp（任选其一，连接握手时也会自动同步最新 Skills）：`,
+      `2. 配置 MCP 服务 ssh-mcp（任选其一，连接握手及后续应用升级时均会自动同步最新 Skills）：`,
       `   - Stdio 命令：${s.mcpStdioCommand}`,
       `   - 或 Streamable HTTP：${s.mcpHttpEndpoint}`,
     ].join("\n");
@@ -84,13 +113,78 @@ export const SettingsModal: React.FC<Props> = ({
     try {
       const res = await api.skillsSyncNow();
       message.success(
-        `已同步 ${res.skillCount} 个 Skills 至 ${res.syncedTargets.length} 个本机 AI 客户端目录`,
+        res.updated
+          ? `已更新 ${res.filesWritten} 个文件（共 ${res.skillCount} 个 Skills）至 ${res.syncedTargets.length} 个本机 AI 目录`
+          : `本机 ${res.syncedTargets.length} 个 AI 目录中的 ${res.skillCount} 个 Skills 均已是最新（v${res.appVersion}）`,
       );
     } catch (e) {
       message.error(String(e));
     } finally {
       setSyncingSkills(false);
     }
+  };
+
+  const handleCheckUpdateNow = async () => {
+    try {
+      const snap = await api.updaterCheckNow();
+      setUpdateStatus(snap);
+      if (snap.phase === "up_to_date") {
+        message.success(`当前已是最新版本 v${snap.currentVersion}`);
+      } else if (snap.phase === "ready" && snap.latestVersion) {
+        message.success(`新版本 v${snap.latestVersion} 已下载就绪，可点击立即重启更新`);
+      } else if (snap.phase === "available" && snap.latestVersion) {
+        message.info(`发现新版本 v${snap.latestVersion}`);
+      } else if (snap.phase === "error" && snap.error) {
+        message.warning(snap.error);
+      }
+    } catch (e) {
+      message.error(String(e));
+    }
+  };
+
+  const handleInstallUpdateNow = async () => {
+    setInstallingUpdate(true);
+    try {
+      await api.updaterInstallNow();
+    } catch (e) {
+      setInstallingUpdate(false);
+      message.error(String(e));
+    }
+  };
+
+  const renderUpdateDescription = () => {
+    if (!updateStatus) {
+      return "开启后自动检查并后台下载新版本，就绪后提示重启完成升级";
+    }
+    const { phase, latestVersion, downloadedBytes, totalBytes, error, lastCheckedAt } =
+      updateStatus;
+
+    if (phase === "checking") {
+      return "正在连接 GitHub Releases 检查最新版本...";
+    }
+    if (phase === "downloading") {
+      if (totalBytes && totalBytes > 0) {
+        const pct = Math.min(100, Math.round((downloadedBytes / totalBytes) * 100));
+        return `正在后台下载 v${latestVersion ?? ""} 更新包 · ${pct}% (${formatBytes(downloadedBytes)} / ${formatBytes(totalBytes)})`;
+      }
+      return `正在后台下载 v${latestVersion ?? ""} 更新包 · 已下载 ${formatBytes(downloadedBytes)}`;
+    }
+    if (phase === "ready") {
+      return `新版本 v${latestVersion ?? ""} 已下载就绪，点击右侧按钮立即重启完成升级`;
+    }
+    if (phase === "installing") {
+      return "正在关闭服务并启动安装程序，请稍候...";
+    }
+    if (phase === "available") {
+      return `发现新版本 v${latestVersion ?? ""}，点击右侧按钮下载并重启升级`;
+    }
+    if (phase === "up_to_date") {
+      return `当前已是最新版本${lastCheckedAt ? ` · 检查于${formatRelativeTime(lastCheckedAt)}` : ""}`;
+    }
+    if (phase === "error" && error) {
+      return error;
+    }
+    return `开启后自动后台下载新版本，就绪后提示重启安装${lastCheckedAt ? ` · 上次检查${formatRelativeTime(lastCheckedAt)}` : ""}`;
   };
 
   const handleStartExport = async () => {
@@ -179,6 +273,15 @@ export const SettingsModal: React.FC<Props> = ({
     }
   };
 
+  const isBusyCheckingOrDownloading =
+    updateStatus?.phase === "checking" ||
+    updateStatus?.phase === "downloading" ||
+    updateStatus?.phase === "installing" ||
+    installingUpdate;
+
+  const canInstallUpdate =
+    updateStatus?.phase === "ready" || updateStatus?.phase === "available";
+
   return (
     <>
       <Modal
@@ -195,7 +298,9 @@ export const SettingsModal: React.FC<Props> = ({
             <div className="srow">
               <div>
                 <div className="sname">MCP 服务</div>
-                <div className="sdesc">允许本地 AI 客户端调用受控运维能力</div>
+                <div className="sdesc">
+                  允许本地 AI 客户端调用受控运维能力（需审批模式下只读命令自动免审批）
+                </div>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 <span className={`st${settings.mcpRunning ? "" : " off"}`}>
@@ -226,14 +331,14 @@ export const SettingsModal: React.FC<Props> = ({
                   gap: 8,
                 }}
               >
-                <div className="sname">连接命令（自动同步配套 Skills）</div>
+                <div className="sname">连接命令（自动热更新配套 Skills）</div>
                 <div style={{ display: "flex", gap: 6 }}>
                   <Button
                     size="small"
                     icon={<SyncOutlined spin={syncingSkills} />}
                     onClick={handleSyncSkillsNow}
                   >
-                    立即安装本机 Skills
+                    立即同步本机 Skills
                   </Button>
                   <Button
                     size="small"
@@ -251,7 +356,7 @@ export const SettingsModal: React.FC<Props> = ({
                 </div>
               </div>
               <div className="sdesc" style={{ marginTop: 3 }}>
-                AI 客户端通过任一方式连接握手时，会自动将内置的 7 个 ssh-mcp Skills 写入本机 AI 目录（.gemini / .codex / .claude / .agents 等）
+                控制台启动、版本升级及 AI 连接时，会自动检测并将内置最新的 7 个 ssh-mcp Skills 热更新至本机 AI 目录（并通知会话刷新）
               </div>
               <div className="cmdline">
                 <code>{settings.mcpStdioCommand}</code>
@@ -355,6 +460,113 @@ export const SettingsModal: React.FC<Props> = ({
               </div>
             </div>
 
+            <div className="srow" style={{ display: "block" }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 12,
+                }}
+              >
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div
+                    className="sname"
+                    style={{ display: "flex", alignItems: "center", gap: 8 }}
+                  >
+                    <span>版本更新</span>
+                    <span
+                      className="mono"
+                      style={{
+                        fontSize: 11,
+                        padding: "1px 6px",
+                        borderRadius: 4,
+                        background: "var(--bg-soft, #f2f4f7)",
+                        color: "var(--t3)",
+                        fontWeight: 500,
+                      }}
+                    >
+                      v{updateStatus?.currentVersion || "1.0.0"}
+                    </span>
+                  </div>
+                  <div
+                    className="sdesc"
+                    style={{
+                      color:
+                        updateStatus?.phase === "error"
+                          ? "#c8372d"
+                          : updateStatus?.phase === "ready"
+                            ? "#067647"
+                            : undefined,
+                    }}
+                  >
+                    {renderUpdateDescription()}
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    flexShrink: 0,
+                  }}
+                >
+                  {canInstallUpdate ? (
+                    <Button
+                      size="small"
+                      type="primary"
+                      icon={<CloudSyncOutlined />}
+                      loading={installingUpdate || updateStatus?.phase === "installing"}
+                      onClick={handleInstallUpdateNow}
+                    >
+                      {updateStatus?.phase === "ready"
+                        ? `立即重启更新 (v${updateStatus.latestVersion})`
+                        : `下载并更新 (v${updateStatus?.latestVersion})`}
+                    </Button>
+                  ) : (
+                    <Button
+                      size="small"
+                      icon={<SyncOutlined spin={isBusyCheckingOrDownloading} />}
+                      disabled={isBusyCheckingOrDownloading}
+                      onClick={handleCheckUpdateNow}
+                    >
+                      检查更新
+                    </Button>
+                  )}
+
+                  <Switch
+                    size="small"
+                    title="开启或关闭自动版本更新"
+                    checked={settings.autoUpdateEnabled}
+                    onChange={(checked) =>
+                      onUpdateSettings({ autoUpdateEnabled: checked })
+                    }
+                  />
+                </div>
+              </div>
+
+              {updateStatus?.releaseNotes &&
+                (updateStatus.phase === "available" ||
+                  updateStatus.phase === "downloading" ||
+                  updateStatus.phase === "ready") && (
+                  <div
+                    className="cmdline"
+                    style={{
+                      marginTop: 8,
+                      display: "block",
+                      maxHeight: 96,
+                      overflow: "auto",
+                      whiteSpace: "pre-wrap",
+                      fontSize: 11.5,
+                      color: "var(--t3)",
+                    }}
+                  >
+                    {updateStatus.releaseNotes}
+                  </div>
+                )}
+            </div>
+
             <div className="srow">
               <div>
                 <div className="sname">配置备份</div>
@@ -424,7 +636,10 @@ export const SettingsModal: React.FC<Props> = ({
                     />
                   </div>
 
-                  <div className="srow">
+                  <div
+                    className="srow"
+                    style={{ borderBottom: 0, paddingBottom: 2 }}
+                  >
                     <div>
                       <div className="sname">默认命令超时（秒）</div>
                       <div className="sdesc">远程操作未显式指定时的超时上限</div>
@@ -439,27 +654,6 @@ export const SettingsModal: React.FC<Props> = ({
                           onUpdateSettings({ defaultTimeoutSeconds: val });
                       }}
                       style={{ width: 88 }}
-                    />
-                  </div>
-
-                  <div
-                    className="srow"
-                    style={{ borderBottom: 0, paddingBottom: 2 }}
-                  >
-                    <div>
-                      <div className="sname">白名单只读 Shell 免审批</div>
-                      <div className="sdesc">
-                        仅放行无任何元字符的 /bin/df、/usr/bin/uptime 等绝对路径命令
-                      </div>
-                    </div>
-                    <Switch
-                      size="small"
-                      checked={settings.allowReadOnlyShellWithoutApproval}
-                      onChange={(checked) =>
-                        onUpdateSettings({
-                          allowReadOnlyShellWithoutApproval: checked,
-                        })
-                      }
                     />
                   </div>
                 </div>

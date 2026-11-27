@@ -77,6 +77,20 @@ impl CoreRuntime {
             }
         }
 
+        // Automatically sync embedded skills to local AI directories on every app startup / post-update launch.
+        tokio::task::spawn_blocking(|| {
+            if let Ok(report) = skills_bundle::auto_install_skills(None, None) {
+                if report.updated {
+                    tracing::info!(
+                        "Synced updated ssh-mcp skills (v{}, {} files) to {:?}",
+                        report.app_version,
+                        report.files_written,
+                        report.synced_targets
+                    );
+                }
+            }
+        });
+
         let stdio_command = format!(
             "\"{}\" --endpoint http://127.0.0.1:{}/mcp",
             stdio_exe_path.display(),

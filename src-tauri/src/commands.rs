@@ -12,8 +12,11 @@ use ssh_mcp_core::terminal::TerminalSessionInfo;
 use ssh_mcp_core::CoreRuntime;
 use tauri::State;
 
+use crate::updater::{UpdateStatusSnapshot, UpdaterManager};
+
 pub struct AppState {
     pub runtime: Arc<CoreRuntime>,
+    pub updater: Arc<UpdaterManager>,
 }
 
 #[derive(Debug, Serialize)]
@@ -260,6 +263,9 @@ pub async fn settings_update(
     if req.refresh_interval_seconds.is_some() || req.failure_alerts_enabled.is_some() {
         rt.metrics.notify_settings_changed();
     }
+    if req.auto_update_enabled == Some(true) && !prev.auto_update_enabled {
+        state.updater.notify_auto_update_enabled();
+    }
 
     rt.events.on_state_changed();
     rt.db
@@ -387,4 +393,19 @@ pub async fn skills_sync_now() -> Result<SkillsSyncReport, String> {
         .await
         .map_err(err_str)?
         .map_err(err_str)
+}
+
+#[tauri::command]
+pub async fn updater_get_status(state: State<'_, AppState>) -> Result<UpdateStatusSnapshot, String> {
+    Ok(state.updater.get_status())
+}
+
+#[tauri::command]
+pub async fn updater_check_now(state: State<'_, AppState>) -> Result<UpdateStatusSnapshot, String> {
+    state.updater.check_now().await
+}
+
+#[tauri::command]
+pub async fn updater_install_now(state: State<'_, AppState>) -> Result<(), String> {
+    state.updater.install_now().await
 }

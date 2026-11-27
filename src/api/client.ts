@@ -17,6 +17,7 @@ import type {
   SettingsUpdateRequest,
   SkillsSyncReport,
   TerminalSessionInfo,
+  UpdateStatusSnapshot,
 } from "../types/models";
 
 export const api = {
@@ -120,6 +121,12 @@ export const api = {
     invoke<void>("terminal_close", { sessionId }),
 
   skillsSyncNow: () => invoke<SkillsSyncReport>("skills_sync_now"),
+
+  updaterGetStatus: () => invoke<UpdateStatusSnapshot>("updater_get_status"),
+
+  updaterCheckNow: () => invoke<UpdateStatusSnapshot>("updater_check_now"),
+
+  updaterInstallNow: () => invoke<void>("updater_install_now"),
 };
 
 export function formatRelativeTime(iso: string | null): string {

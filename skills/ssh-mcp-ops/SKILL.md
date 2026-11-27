@@ -11,10 +11,11 @@ description: 通过 ssh-mcp 管理已在 Windows 桌面控制台中配置的 Lin
 
 1. **解析目标**：调用 `servers_list` 获取服务器清单、在线状态、主机密钥信任状态与实时 `metrics`（CPU/内存/磁盘）及延迟。按名称、主机、环境与上下文唯一锁定 `serverIds`；存在歧义且影响作用范围时先向用户确认，始终传入明确的服务器集合。
 2. **选用最窄专用工具**：连通性用 `server_check`，主机概况用 `system_summary`，进程用 `processes_list`，服务与日志用 `services_list` / `service_status` / `service_control` / `logs_query`，容器与空间用 `docker_*` 系列工具；仅当专用工具无法表达用户明确意图时使用 `shell_execute`。
-3. **填写变更原因（`reason`）**：调用 `service_control`、`shell_execute`、`file_upload`、`file_download` 或 `docker_cleanup_execute` 时，始终传入简明准确的 `reason`（说明本次变更目的），供桌面控制台「待审批」列表与 Windows 系统通知直接展示。
+3. **填写变更原因（`reason`）**：调用 `service_control`、`file_upload`、`file_download`、`docker_cleanup_execute` 或非只读 `shell_execute` 时，始终传入简明准确的 `reason`（说明本次变更目的），供桌面控制台「待审批」列表与 Windows 系统通知直接展示（在「需审批」模式下，所有专用只读工具以及常见只读 `shell_execute` 查询命令及安全管道含 `sudo` 均自动免审批放行）。
 4. **单次长等持久任务**：普通远程工具返回 `Job` 快照（含 `id` 与 `revision`），立即调用 `job_wait({ jobId, afterRevision: revision })` 等待终态或进入待审批；Docker 专用工具内部已自动长等一次。若 `timedOut: true`，继续对同一 `jobId` 调用 `job_wait`。
 5. **响应人工审批暂停**：当任务状态为 `waiting_approval` 时，向用户报告目标服务器、`approvalId`、`riskLevel`、`matchedPolicy` 与 `approvalReason`，请用户在桌面控制台「待审批」栏批准或拒绝；用户处理后继续对同一 `jobId` 调用 `job_wait`。
 6. **分页读取输出**：对 `outputBytes > 0` 的目标调用 `job_output_read`（首块 `offset: 0`，后续传递 `nextCursor` 直至为 `null`），结合 `structuredResult`、`exitCode` 与 `error` 逐台服务器核对并汇总结果。
+7. **响应 Skills 自动热更新**：当任意 `ssh-mcp` 工具返回结果中包含 `_skillsAutoUpdated` 字段或系统初始化提示 Skills 已更新时，说明桌面端刚完成升级并已将新版 `SKILL.md` 自动同步至本机技能目录，请立即重新读取最新的 `SKILL.md`（及所需参考文件）以刷新当前会话中的操作规范。
 
 处理工具映射、多目标生命周期、分页游标或 Docker 清理参数时，查阅 [references/workflows.md](references/workflows.md)。
 

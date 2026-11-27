@@ -24,11 +24,13 @@ use crate::models::{
 };
 
 const MCP_PROTOCOL_VERSION: &str = "2025-03-26";
-const SERVER_INSTRUCTIONS: &str = "通过本机服务器控制台 (sshMcp) 安全管理已配置的 Linux 服务器。服务器配置、加密凭据和主机密钥指纹仅可在桌面控制台中修改。远程操作会创建持久任务；处于「需审批」模式的服务器或包含卷删除的操作会进入待审批队列，请使用 job_wait 等待既有任务完成或审批变化，切勿通过重复创建任务进行轮询；Docker 场景优先使用结构化专用工具。";
+const SERVER_INSTRUCTIONS: &str = "通过本机服务器控制台 (sshMcp) 安全管理已配置的 Linux 服务器。服务器配置、加密凭据和主机密钥指纹仅可在桌面控制台中修改。远程操作会创建持久任务；在「需审批」模式下，所有专用只读工具与经安全白名单识别的只读 shell_execute 命令（含 sudo 查询）均免审批直接执行，而变更操作、文件传输或包含卷删除的操作会进入待审批队列。请使用 job_wait 等待既有任务完成或审批变化，切勿通过重复创建任务进行轮询；Docker 场景优先使用结构化专用工具。";
 
 #[derive(Debug, Clone)]
 struct McpSessionMeta {
     client_name: String,
+    acked_skills_hash: String,
+    pending_skills_notice: Option<Value>,
 }
 
 #[derive(Clone)]
@@ -36,6 +38,7 @@ pub struct McpRouterState {
     db: Arc<AppDatabase>,
     jobs: Arc<JobService>,
     sessions: Arc<Mutex<HashMap<String, McpSessionMeta>>>,
+    skills_hash: String,
 }
 
 impl McpRouterState {
@@ -44,6 +47,7 @@ impl McpRouterState {
             db,
             jobs,
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            skills_hash: crate::skills_bundle::embedded_skills_bundle_hash(),
         }
     }
 }
@@ -312,31 +316,55 @@ async fn dispatch_rpc(
                 .and_then(|v| v.as_str())
                 .unwrap_or(MCP_PROTOCOL_VERSION);
 
+            let cn = client_name.clone();
+            let sync_report = tokio::task::spawn_blocking(move || {
+                crate::skills_bundle::auto_install_skills(Some(&cn), None)
+            })
+            .await
+            .ok()
+            .and_then(|r| r.ok());
+
+            let pending_notice = sync_report.as_ref().and_then(|rep| {
+                if rep.updated {
+                    Some(build_skills_reload_notice(&rep.synced_targets, &state.skills_hash))
+                } else {
+                    None
+                }
+            });
+
+            let mut instructions = SERVER_INSTRUCTIONS.to_string();
+            if let Some(rep) = &sync_report {
+                if rep.updated {
+                    instructions.push_str(&format!(
+                        " 【Skills 已自动更新】本机 ssh-mcp 配套 Skills 刚刚自动升级至 v{}（目录：{}），若当前会话缓存了旧版技能说明，请立即重新读取最新的 SKILL.md。",
+                        rep.app_version,
+                        rep.synced_targets.join(", ")
+                    ));
+                }
+            }
+
             let sid = Uuid::new_v4().to_string();
             state.sessions.lock().insert(
                 sid.clone(),
                 McpSessionMeta {
                     client_name: client_name.clone(),
+                    acked_skills_hash: state.skills_hash.clone(),
+                    pending_skills_notice: pending_notice,
                 },
             );
             *session_id = Some(sid);
 
-            // Automatically sync embedded ssh-mcp skills into the local AI client's skills directory!
-            let cn = client_name.clone();
-            tokio::task::spawn_blocking(move || {
-                let _ = crate::skills_bundle::auto_install_skills(Some(&cn), None);
-            });
-
             Ok(json!({
                 "protocolVersion": requested_proto,
                 "capabilities": {
-                    "tools": { "listChanged": false }
+                    "tools": { "listChanged": true }
                 },
                 "serverInfo": {
                     "name": "ssh-mcp",
-                    "version": env!("CARGO_PKG_VERSION")
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "skillsBundleHash": state.skills_hash
                 },
-                "instructions": SERVER_INSTRUCTIONS
+                "instructions": instructions
             }))
         }
         "ping" => Ok(json!({})),
@@ -353,8 +381,15 @@ async fn dispatch_rpc(
                 .cloned()
                 .unwrap_or_else(|| json!({}));
 
+            let skills_notice = check_and_consume_skills_update_for_session(
+                state,
+                session_id,
+                header_client_name,
+            )
+            .await;
+
             match invoke_mcp_tool(state, tool_name, args, &requester).await {
-                Ok(val) => Ok(mcp_tool_ok(val)),
+                Ok(val) => Ok(mcp_tool_ok_with_notice(val, skills_notice)),
                 Err(err) => Ok(mcp_tool_err(&err.to_string())),
             }
         }
@@ -380,7 +415,81 @@ async fn dispatch_rpc(
     }
 }
 
-fn mcp_tool_ok(value: Value) -> Value {
+fn build_skills_reload_notice(synced_targets: &[String], bundle_hash: &str) -> Value {
+    json!({
+        "appVersion": env!("CARGO_PKG_VERSION"),
+        "bundleHash": bundle_hash,
+        "syncedTargets": synced_targets,
+        "actionRequired": "检测到 ssh-mcp 应用内置 Skills 已更新并已自动同步至本机技能目录，请立即重新读取最新的 ssh-mcp-ops/SKILL.md（及相关子技能 SKILL.md）以刷新当前会话规范。"
+    })
+}
+
+async fn check_and_consume_skills_update_for_session(
+    state: &McpRouterState,
+    session_id: &mut Option<String>,
+    header_client_name: Option<&str>,
+) -> Option<Value> {
+    // Case 1: Active known session -> check if a pending notice was queued during initialize or hash changed
+    if let Some(sid) = session_id.as_deref() {
+        let mut sessions = state.sessions.lock();
+        if let Some(meta) = sessions.get_mut(sid) {
+            if let Some(notice) = meta.pending_skills_notice.take() {
+                meta.acked_skills_hash = state.skills_hash.clone();
+                return Some(notice);
+            }
+            if meta.acked_skills_hash == state.skills_hash {
+                return None;
+            }
+            meta.acked_skills_hash = state.skills_hash.clone();
+        }
+    }
+
+    // Case 2: Session ID came from an older app instance before an in-place app upgrade (not in `state.sessions`),
+    // or stateless tool call without initialize -> ensure disk skills are synced and emit a one-time reload notice!
+    let had_stale_session_id = session_id
+        .as_deref()
+        .is_some_and(|sid| !state.sessions.lock().contains_key(sid));
+
+    let cname = header_client_name.map(ToString::to_string);
+    let report = tokio::task::spawn_blocking(move || {
+        crate::skills_bundle::auto_install_skills(cname.as_deref(), None)
+    })
+    .await
+    .ok()
+    .and_then(|r| r.ok());
+
+    let sid = session_id
+        .clone()
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    state.sessions.lock().insert(
+        sid.clone(),
+        McpSessionMeta {
+            client_name: header_client_name
+                .unwrap_or("MCP 客户端")
+                .to_string(),
+            acked_skills_hash: state.skills_hash.clone(),
+            pending_skills_notice: None,
+        },
+    );
+    *session_id = Some(sid);
+
+    if let Some(rep) = report {
+        if rep.updated || had_stale_session_id {
+            return Some(build_skills_reload_notice(
+                &rep.synced_targets,
+                &state.skills_hash,
+            ));
+        }
+    }
+    None
+}
+
+fn mcp_tool_ok_with_notice(mut value: Value, skills_notice: Option<Value>) -> Value {
+    if let Some(notice) = skills_notice {
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert("_skillsAutoUpdated".to_string(), notice);
+        }
+    }
     let pretty = serde_json::to_string_pretty(&value).unwrap_or_else(|_| "{}".to_string());
     json!({
         "content": [{ "type": "text", "text": pretty }],
@@ -1006,7 +1115,7 @@ pub fn mcp_tools_catalog() -> Vec<Value> {
         }),
         json!({
             "name": "shell_execute",
-            "description": "在目标服务器执行完整 Shell 命令（需审批模式服务器必须经控制台批准后执行）。",
+            "description": "在目标服务器执行 Shell 命令（需审批模式下纯只读白名单命令及只读管道免审批直接执行，变更或未知风险命令须经控制台批准后执行）。",
             "inputSchema": {
                 "type": "object",
                 "properties": {

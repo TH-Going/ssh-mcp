@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod updater;
 pub mod win_toast;
 
 use std::collections::HashSet;
@@ -18,9 +19,14 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 
 use commands::AppState;
+use updater::UpdaterManager;
 use win_toast::ToastActionEvent;
 
 static EXITING: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn mark_exiting_for_update() {
+    EXITING.store(true, Ordering::SeqCst);
+}
 
 struct TauriEventBridge {
     app: AppHandle,
@@ -215,6 +221,7 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
             if start_hidden {
                 if let Some(win) = app.get_webview_window("main") {
@@ -299,7 +306,8 @@ pub fn run() {
                 }
             }
 
-            app.manage(AppState { runtime });
+            let updater = UpdaterManager::new(handle.clone(), Arc::clone(&runtime));
+            app.manage(AppState { runtime, updater });
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -351,6 +359,9 @@ pub fn run() {
             commands::terminal_resize,
             commands::terminal_close,
             commands::skills_sync_now,
+            commands::updater_get_status,
+            commands::updater_check_now,
+            commands::updater_install_now,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Server Safe Console");

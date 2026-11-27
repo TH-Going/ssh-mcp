@@ -57,7 +57,8 @@ pub fn run_migrations(conn: &Connection) -> CoreResult<()> {
             failure_alerts_enabled INTEGER NOT NULL DEFAULT 1,
             default_concurrency INTEGER NOT NULL DEFAULT 3,
             default_timeout_seconds INTEGER NOT NULL DEFAULT 300,
-            allow_read_only_shell_without_approval INTEGER NOT NULL DEFAULT 0,
+            allow_read_only_shell_without_approval INTEGER NOT NULL DEFAULT 1,
+            auto_update_enabled INTEGER NOT NULL DEFAULT 1,
             updated_at TEXT NOT NULL
         );
 
@@ -155,11 +156,27 @@ pub fn run_migrations(conn: &Connection) -> CoreResult<()> {
         ",
     )?;
 
+    // Idempotent schema upgrade for existing databases created prior to v1.0.0
+    let has_auto_update_col: bool = {
+        let mut stmt = conn.prepare("PRAGMA table_info(settings)")?;
+        let cols: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<Result<Vec<_>, _>>()?;
+        cols.iter().any(|c| c == "auto_update_enabled")
+    };
+    if !has_auto_update_col {
+        conn.execute(
+            "ALTER TABLE settings ADD COLUMN auto_update_enabled INTEGER NOT NULL DEFAULT 1",
+            [],
+        )?;
+    }
+
     conn.execute(
         "INSERT OR IGNORE INTO settings (
             id, mcp_enabled, mcp_port, refresh_interval_seconds, failure_alerts_enabled,
-            default_concurrency, default_timeout_seconds, allow_read_only_shell_without_approval, updated_at
-        ) VALUES (1, 1, 8787, 5, 1, 3, 300, 0, datetime('now'))",
+            default_concurrency, default_timeout_seconds, allow_read_only_shell_without_approval,
+            auto_update_enabled, updated_at
+        ) VALUES (1, 1, 8787, 5, 1, 3, 300, 1, 1, datetime('now'))",
         [],
     )?;
 

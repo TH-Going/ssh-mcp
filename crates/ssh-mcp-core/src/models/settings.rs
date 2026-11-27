@@ -11,9 +11,9 @@ pub struct AppSettings {
     pub refresh_interval_seconds: u32,
     pub failure_alerts_enabled: bool,
     pub autostart_enabled: bool,
+    pub auto_update_enabled: bool,
     pub default_concurrency: usize,
     pub default_timeout_seconds: u32,
-    pub allow_read_only_shell_without_approval: bool,
     pub approval_ttl_seconds: u64,
     pub output_retention_hours: u64,
     pub audit_retention_days: u64,
@@ -26,9 +26,9 @@ pub struct SettingsUpdateRequest {
     pub refresh_interval_seconds: Option<u32>,
     pub failure_alerts_enabled: Option<bool>,
     pub autostart_enabled: Option<bool>,
+    pub auto_update_enabled: Option<bool>,
     pub default_concurrency: Option<usize>,
     pub default_timeout_seconds: Option<u32>,
-    pub allow_read_only_shell_without_approval: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

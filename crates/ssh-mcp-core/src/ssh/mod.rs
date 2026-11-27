@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -389,12 +390,7 @@ impl SshService {
             }
         }
 
-        let mut cfg = client::Config::default();
-        cfg.inactivity_timeout = Some(Duration::from_secs(60));
-        cfg.keepalive_interval = Some(Duration::from_secs(15));
-        cfg.keepalive_max = 3;
-        cfg.nodelay = true;
-        let cfg = Arc::new(cfg);
+        let cfg = Arc::new(build_client_config());
 
         let handler = SshClientHandler {
             trusted_fingerprint: trusted_fp.clone(),
@@ -1001,4 +997,119 @@ pub fn parse_metrics_output(stdout: &str) -> Option<ServerMetrics> {
         disk_percent: (disk_pct? * 10.0).round() / 10.0,
         sampled_at: Utc::now().to_rfc3339(),
     })
+}
+
+fn build_client_config() -> client::Config {
+    let mut preferred = russh::Preferred::DEFAULT;
+
+    let mut macs = preferred.mac.into_owned();
+    for legacy_mac in [russh::mac::HMAC_SHA1_ETM, russh::mac::HMAC_SHA1] {
+        if !macs.contains(&legacy_mac) {
+            macs.push(legacy_mac);
+        }
+    }
+    preferred.mac = Cow::Owned(macs);
+
+    let mut kexes = preferred.kex.into_owned();
+    let ext_pos = kexes
+        .iter()
+        .position(|k| {
+            matches!(
+                *k,
+                russh::kex::EXTENSION_SUPPORT_AS_CLIENT
+                    | russh::kex::EXTENSION_SUPPORT_AS_SERVER
+                    | russh::kex::EXTENSION_OPENSSH_STRICT_KEX_AS_CLIENT
+                    | russh::kex::EXTENSION_OPENSSH_STRICT_KEX_AS_SERVER
+            )
+        })
+        .unwrap_or(kexes.len());
+    let mut tail_exts = kexes.split_off(ext_pos);
+    for extra_kex in [
+        russh::kex::ECDH_SHA2_NISTP256,
+        russh::kex::ECDH_SHA2_NISTP384,
+        russh::kex::ECDH_SHA2_NISTP521,
+        russh::kex::DH_G14_SHA1,
+        russh::kex::DH_GEX_SHA1,
+        russh::kex::DH_G1_SHA1,
+    ] {
+        if !kexes.contains(&extra_kex) {
+            kexes.push(extra_kex);
+        }
+    }
+    kexes.append(&mut tail_exts);
+    preferred.kex = Cow::Owned(kexes);
+
+    let mut ciphers = preferred.cipher.into_owned();
+    for extra_cipher in [
+        russh::cipher::AES_128_GCM,
+        russh::cipher::AES_256_CBC,
+        russh::cipher::AES_192_CBC,
+        russh::cipher::AES_128_CBC,
+    ] {
+        if !ciphers.contains(&extra_cipher) {
+            ciphers.push(extra_cipher);
+        }
+    }
+    preferred.cipher = Cow::Owned(ciphers);
+
+    let mut cfg = client::Config::default();
+    cfg.preferred = preferred;
+    cfg.inactivity_timeout = Some(Duration::from_secs(60));
+    cfg.keepalive_interval = Some(Duration::from_secs(15));
+    cfg.keepalive_max = 3;
+    cfg.nodelay = true;
+    cfg
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn client_config_appends_legacy_algorithms_after_modern_defaults() {
+        let cfg = build_client_config();
+
+        let macs: Vec<&str> = cfg.preferred.mac.iter().map(|m| m.as_ref()).collect();
+        let sha256_idx = macs
+            .iter()
+            .position(|&m| m == "hmac-sha2-256")
+            .expect("hmac-sha2-256 present");
+        let sha1_etm_idx = macs
+            .iter()
+            .position(|&m| m == "hmac-sha1-etm@openssh.com")
+            .expect("hmac-sha1-etm@openssh.com present");
+        let sha1_idx = macs
+            .iter()
+            .position(|&m| m == "hmac-sha1")
+            .expect("hmac-sha1 present");
+        assert!(sha256_idx < sha1_etm_idx);
+        assert!(sha1_etm_idx < sha1_idx);
+
+        let kexes: Vec<&str> = cfg.preferred.kex.iter().map(|k| k.as_ref()).collect();
+        let curve_idx = kexes
+            .iter()
+            .position(|&k| k == "curve25519-sha256")
+            .expect("curve25519-sha256 present");
+        let dh_sha1_idx = kexes
+            .iter()
+            .position(|&k| k == "diffie-hellman-group14-sha1")
+            .expect("diffie-hellman-group14-sha1 present");
+        let strict_ext_idx = kexes
+            .iter()
+            .position(|&k| k == "kex-strict-c-v00@openssh.com")
+            .expect("strict kex extension preserved");
+        assert!(curve_idx < dh_sha1_idx);
+        assert!(dh_sha1_idx < strict_ext_idx);
+
+        let ciphers: Vec<&str> = cfg.preferred.cipher.iter().map(|c| c.as_ref()).collect();
+        let ctr_idx = ciphers
+            .iter()
+            .position(|&c| c == "aes128-ctr")
+            .expect("aes128-ctr present");
+        let cbc_idx = ciphers
+            .iter()
+            .position(|&c| c == "aes256-cbc")
+            .expect("aes256-cbc present");
+        assert!(ctr_idx < cbc_idx);
+    }
 }
