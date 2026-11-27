@@ -39,15 +39,13 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install
 
-      - name: Build & publish signed Chinese NSIS installer
-        uses: tauri-apps/tauri-action@v0
+      - name: Build signed Chinese NSIS installer
+        run: pnpm build:installer
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        with:
-          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '__VERSION__' }}
-          releaseName: "服务器控制台 v__VERSION__"
-          releaseBody: "请下载下方 `服务器控制台___VERSION___x64-setup.exe`（简体中文安装向导）进行全新安装；已安装客户端可通过「设置 -> 版本更新」自动更新。"
-          releaseDraft: false
-          prerelease: false
+
+      - name: Generate latest.json & publish GitHub Release
+        run: node scripts/publish-github-release.mjs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
